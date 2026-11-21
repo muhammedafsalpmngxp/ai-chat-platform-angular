@@ -1,0 +1,63 @@
+<div class="page">
+  <h1>Settings</h1>
+
+  <section class="card">
+    <h2>Account</h2>
+    <dl>
+      <dt>Name</dt>
+      <dd>{{ auth.user()?.display_name }}</dd>
+      <dt>Username</dt>
+      <dd>{{ auth.user()?.username }}</dd>
+    </dl>
+    <p class="hint">To change your name or password, edit <code>backend/.env</code> (see the README).</p>
+  </section>
+
+  <section class="card" id="pricing">
+    <h2>Models &amp; pricing</h2>
+    <p class="hint">
+      Prices in USD per 1 million tokens (OpenAI standard tier)@if (models.catalog()?.prices_as_of; as asOf) {, as of {{ asOf }}}.
+      Cached input is the price for repeated prompt text (system prompt, earlier messages).
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Model</th>
+            <th scope="col" class="num">Input</th>
+            <th scope="col" class="num">Cached input</th>
+            <th scope="col" class="num">Output</th>
+            <th scope="col" class="num">vs Luna</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (model of models.models(); track model.id) {
+            <tr [class.recommended]="model.tier === 'recommended'" [class.low]="model.tier === 'low'">
+              <th scope="row">
+                <span class="name">{{ model.label }}</span>
+                @switch (model.tier) {
+                  @case ('recommended') { <span class="badge recommended">Recommended · default</span> }
+                  @case ('premium') { <span class="badge premium">💎 Premium</span> }
+                  @case ('low') { <span class="badge low">Not recommended</span> }
+                }
+                <span class="id">{{ model.id }}</span>
+              </th>
+              <td class="num">{{ price(model.input_price) }}</td>
+              <td class="num">{{ price(model.cached_input_price) }}</td>
+              <td class="num">{{ price(model.output_price) }}</td>
+              <td class="num">{{ relative(model) }}</td>
+            </tr>
+          } @empty {
+            <tr><td colspan="5" class="hint">Loading models…</td></tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <ul class="notes">
+      <li><span class="badge premium">💎 Premium</span> models cost much more per token. Using one asks for your password again; the unlock lasts {{ models.catalog()?.premium_unlock_minutes ?? 30 }} minutes.</li>
+      <li><span class="badge low">Not recommended</span> models are older: weaker answers, and often a higher price than the recommended model.</li>
+      <li>The cost shown in each chat's context meter is an estimate from these prices.</li>
+    </ul>
+  </section>
+</div>

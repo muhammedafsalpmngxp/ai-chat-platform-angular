@@ -1,0 +1,25 @@
+# Fixed replies that never go through the LLM (instant, free, predictable).
+version: 1
+
+explicit_refusal: >-
+  ⚠️ This request involves explicit content. I can't search for or show
+  results for it.
+
+realtime_unknown: >-
+  I don't know that yet - I can't access live information like weather,
+  live prices, scores or traffic in this version.
+
+search_unavailable: >-
+  Web search is unavailable right now. Answer from your own knowledge and clearly
+  tell the user you could not check the web, so the information may be outdated.
+
+search_no_results: >-
+  The web search returned no usable results. Say you couldn't find current
+  information, and only add what you know with a clear "may be outdated" note.
+
+model_error: >-
+  Something went wrong while generating a response. Please try again.
+
+missing_api_key: >-
+  The OpenAI API key is not configured. Add OPENAI_API_KEY to backend/.env
+  and restart the backend.

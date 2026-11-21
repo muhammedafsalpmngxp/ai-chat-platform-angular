@@ -1,0 +1,77 @@
+@let current = session.model();
+
+<button
+  type="button"
+  class="trigger"
+  [class.low]="current?.tier === 'low'"
+  [class.premium]="current?.tier === 'premium'"
+  [attr.aria-expanded]="open()"
+  aria-haspopup="listbox"
+  (click)="toggle($event)"
+>
+  @if (current?.tier === 'premium') {
+    <span aria-hidden="true">💎</span>
+  }
+  {{ current?.label ?? 'Loading…' }}
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+</button>
+
+@if (open()) {
+  <div class="menu" role="listbox" aria-label="Choose a model">
+    @for (model of modelService.models(); track model.id) {
+      <button
+        type="button"
+        role="option"
+        class="option"
+        [class.low]="model.tier === 'low'"
+        [class.selected]="model.id === session.modelId()"
+        [attr.aria-selected]="model.id === session.modelId()"
+        (click)="choose(model)"
+      >
+        <span class="line">
+          <span class="name">{{ model.label }}</span>
+          @switch (model.tier) {
+            @case ('recommended') { <span class="badge recommended">Recommended</span> }
+            @case ('premium') { <span class="badge premium">💎 Premium</span> }
+            @case ('low') { <span class="badge low">Not recommended</span> }
+          }
+          @if (isLocked(model)) {
+            <span class="lock" title="Needs your password">🔒</span>
+          }
+          @if (model.id === session.modelId()) {
+            <svg class="check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+              <path d="m5 12 5 5 9-10" />
+            </svg>
+          }
+        </span>
+        <span class="sub">
+          {{ price(model.input_price) }} / {{ price(model.output_price) }} per 1M · {{ relative(model) }}
+        </span>
+      </button>
+    }
+    <a class="pricing-link" routerLink="/settings" fragment="pricing" (click)="open.set(false)">Pricing details →</a>
+  </div>
+}
+
+@if (lowWarning(); as model) {
+  <div class="app-dialog-backdrop" (click)="lowWarning.set(null)">
+    <div class="app-dialog" role="alertdialog" aria-modal="true" aria-labelledby="low-title" (click)="$event.stopPropagation()">
+      <h3 id="low-title" class="low-title">⚠️ {{ model.label }} is not recommended</h3>
+      <p>{{ model.warning || 'These models are not good. Use a recommended model for better results and optimum price.' }}</p>
+      @if (modelService.defaultModel(); as rec) {
+        <p class="compare">
+          {{ rec.label }} costs {{ price(rec.input_price) }} / {{ price(rec.output_price) }} per 1M tokens;
+          {{ model.label }} costs {{ price(model.input_price) }} / {{ price(model.output_price) }}.
+        </p>
+      }
+      <div class="actions">
+        <button type="button" class="btn" (click)="useAnyway()">Use anyway</button>
+        <button type="button" class="btn primary" (click)="useRecommended()">
+          Use {{ modelService.defaultModel()?.label }} (recommended)
+        </button>
+      </div>
+    </div>
+  </div>
+}

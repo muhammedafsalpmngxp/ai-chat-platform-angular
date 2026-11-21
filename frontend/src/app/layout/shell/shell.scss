@@ -1,0 +1,76 @@
+:host {
+  display: block;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.shell {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sidebar {
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+  transition: margin-left 0.2s ease;
+}
+
+.sidebar-closed .sidebar {
+  margin-left: calc(-1 * var(--sidebar-width));
+}
+
+.main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.open-sidebar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+}
+
+/* Phones: sidebar becomes an overlay drawer. */
+.mobile {
+  /* Animate `left`, not `transform`: a transformed ancestor would trap the
+     sidebar's fixed-position delete dialog inside the drawer. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    margin-left: 0;
+    max-width: 85vw;
+    transition: left 0.2s ease;
+  }
+
+  &.sidebar-closed .sidebar {
+    left: calc(-1 * var(--sidebar-width));
+  }
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.5);
+}

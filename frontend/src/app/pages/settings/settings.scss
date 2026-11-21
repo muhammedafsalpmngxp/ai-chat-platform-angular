@@ -1,0 +1,123 @@
+:host {
+  display: block;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 56px 16px 32px;
+}
+
+h1 {
+  margin: 0 0 20px;
+  font-size: 1.6rem;
+  font-weight: 600;
+}
+
+.card {
+  margin-bottom: 20px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg-sidebar);
+  scroll-margin-top: 16px;
+
+  h2 {
+    margin: 0 0 12px;
+    font-size: 1.1rem;
+  }
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0 0 12px;
+
+  dt {
+    color: var(--text-muted);
+  }
+  dd {
+    margin: 0;
+  }
+}
+
+.hint {
+  margin: 0 0 14px;
+  color: var(--text-faint);
+  font-size: 0.85rem;
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #2b2b2b;
+  font-size: 0.85em;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+th,
+td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+thead th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.8rem;
+}
+
+.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+tbody th {
+  font-weight: normal;
+}
+
+.name {
+  margin-right: 6px;
+  font-weight: 500;
+}
+
+.id {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+tr.recommended {
+  background: rgba(16, 163, 127, 0.06);
+}
+
+tr.low .name {
+  color: #facc15;
+}
+
+.notes {
+  margin: 16px 0 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+
+  li {
+    margin-bottom: 6px;
+  }
+}

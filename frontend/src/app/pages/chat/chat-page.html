@@ -1,0 +1,216 @@
+<header class="header">
+  <span class="chat-title">{{ title() }}</span>
+</header>
+
+<section class="conversation" #scroller (scroll)="onScroll()">
+  @if (loadError(); as message) {
+    <p class="state error">{{ message }}</p>
+  } @else if (session.loading()) {
+    <p class="state">Loading…</p>
+  } @else if (session.isEmpty()) {
+    <div class="welcome">
+      <h1>{{ greeting() }}</h1>
+    </div>
+  } @else {
+    <ol class="messages" (click)="onMessagesClick($event)" aria-live="polite">
+      @for (message of session.messages(); track message.id) {
+        @if (message.role === 'user') {
+          <li class="message user">
+            @if (message.attachments?.length) {
+              <div class="message-files">
+                @for (file of message.attachments; track file.id) {
+                  <app-attachment-chip
+                    [name]="file.name"
+                    [kind]="file.kind"
+                    [size]="file.size"
+                    [info]="file"
+                    [chatId]="session.chatId()"
+                  />
+                }
+              </div>
+            }
+            @if (message.content) {
+              <div class="bubble">{{ message.content }}</div>
+            }
+          </li>
+        } @else {
+          <li class="message assistant" [class.refused]="message.status === 'refused'">
+            @if (message.pending) {
+              <!-- Live LangGraph progress: which node is running right now. -->
+              @let step = currentStep(message);
+              <div class="graph-progress" aria-live="polite">
+                <div class="thinking">
+                  <span class="dots" aria-hidden="true"><span></span><span></span><span></span></span>
+                  <span class="status-text">
+                    {{ step?.label ?? 'Starting' }}@if (step?.detail) {<span class="detail"> · {{ step!.detail }}</span>}…
+                  </span>
+                </div>
+                @if (message.steps?.length) {
+                  <div class="graph-trail" title="Steps in the LangGraph agent graph">
+                    <span class="lg-badge">LangGraph</span>
+                    @for (s of message.steps; track s.node; let last = $last) {
+                      <span class="node" [class.done]="s.status === 'done'" [class.running]="s.status === 'running'">
+                        @if (s.status === 'done') { <span aria-hidden="true">✓</span> }
+                        {{ s.node }}
+                      </span>
+                      @if (!last) { <span class="arrow" aria-hidden="true">→</span> }
+                    }
+                  </div>
+                }
+              </div>
+            }
+            @if (message.content) {
+              <div class="markdown" [innerHTML]="html(message)"></div>
+            }
+            @if (message.sources?.length) {
+              @let open = openSources().has(message.id);
+              <div class="sources">
+                <button
+                  type="button"
+                  class="sources-toggle"
+                  [attr.aria-expanded]="open"
+                  (click)="toggleSources(message.id)"
+                >
+                  Sources
+                  <span class="count">{{ message.sources!.length }}</span>
+                  <svg class="chevron" [class.open]="open" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                    <path d="m9 6 6 6-6 6" />
+                  </svg>
+                </button>
+                @if (message.confidence) {
+                  <span
+                    class="confidence"
+                    [class]="'confidence ' + message.confidence"
+                    [title]="confidenceHint(message.confidence)"
+                  >
+                    {{ message.confidence | titlecase }} confidence
+                  </span>
+                }
+                @if (open) {
+                  <div class="source-list">
+                    @for (source of message.sources; track source.url; let i = $index) {
+                      <a class="source" [href]="source.url" target="_blank" rel="noopener noreferrer" [title]="source.title">
+                        <span class="num">{{ i + 1 }}</span>
+                        <span class="domain">{{ domain(source.url) }}</span>
+                      </a>
+                    }
+                  </div>
+                }
+              </div>
+            }
+            @if (message.error) {
+              <p class="error-note" role="alert">{{ message.error }}</p>
+            }
+            @if (!message.pending && message.content) {
+              <div class="meta">
+                <button
+                  type="button"
+                  class="meta-btn icon"
+                  (click)="copyMessage(message)"
+                  [attr.aria-label]="copiedId() === message.id ? 'Copied' : 'Copy reply'"
+                  [title]="copiedId() === message.id ? 'Copied' : 'Copy'"
+                >
+                  @if (copiedId() === message.id) {
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="m5 12 5 5 9-10" /></svg>
+                  } @else {
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+                  }
+                </button>
+                @if (message.status === 'stopped') {
+                  <span class="tag">Stopped</span>
+                }
+              </div>
+            }
+          </li>
+        }
+      }
+    </ol>
+  }
+</section>
+
+<footer class="composer-area">
+  @if (sendError(); as message) {
+    <p class="send-error" role="alert">{{ message }}</p>
+  }
+  <form
+    class="composer"
+    [class.dragging]="dragging()"
+    (submit)="$event.preventDefault(); submit()"
+    (dragover)="onDragOver($event)"
+    (dragleave)="dragging.set(false)"
+    (drop)="onDrop($event)"
+  >
+    @if (files.pending().length) {
+      <div class="pending-files">
+        @for (file of files.pending(); track file.key) {
+          <app-attachment-chip
+            [name]="file.name"
+            [kind]="file.kind"
+            [size]="file.size"
+            [info]="file.info"
+            [chatId]="session.chatId()"
+            [previewUrl]="file.previewUrl"
+            [uploading]="!file.info && !file.error"
+            [error]="file.error"
+            [removable]="true"
+            (remove)="removeFile(file)"
+          />
+        }
+      </div>
+    }
+
+    <textarea
+      #composer
+      rows="1"
+      placeholder="Message AI Chatbot"
+      aria-label="Message"
+      [value]="draft()"
+      (input)="onInput($event)"
+      (keydown)="onKeydown($event)"
+      (paste)="onPaste($event)"
+    ></textarea>
+
+    <div class="toolbar">
+      <input
+        #fileInput
+        type="file"
+        class="sr-only"
+        multiple
+        [accept]="files.config()?.accept ?? ''"
+        (change)="onFilesChosen($event)"
+        tabindex="-1"
+        aria-hidden="true"
+      />
+      <button
+        type="button"
+        class="tool-btn attach"
+        (click)="pickFiles()"
+        [disabled]="!canAttach()"
+        aria-label="Attach files"
+        [title]="'Attach images or documents (max ' + (files.config()?.max_upload_mb ?? 10) + ' MB each, ' + (files.config()?.max_files_per_chat ?? 3) + ' files per chat)'"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="m21.4 11.6-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8" />
+        </svg>
+      </button>
+
+      <div class="toolbar-right">
+        <app-context-meter [usage]="session.usage()" />
+        <app-model-picker />
+        @if (session.streaming()) {
+          <button type="button" class="send stop" (click)="session.stop()" aria-label="Stop generating" title="Stop">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+          </button>
+        } @else {
+          <button type="submit" class="send" [disabled]="!canSend()" aria-label="Send message" title="Send">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 19V5" />
+              <path d="m5 12 7-7 7 7" />
+            </svg>
+          </button>
+        }
+      </div>
+    </div>
+  </form>
+  <p class="hint">AI can make mistakes. Check important info.</p>
+</footer>

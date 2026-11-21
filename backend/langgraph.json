@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "chat": "./app/graph/studio.py:make_graph"
+  },
+  "env": ".env",
+  "python_version": "3.11"
+}
