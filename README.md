@@ -62,7 +62,7 @@ verified web search, and live progress shown in the UI while the graph runs.
 | Layer | Technology |
 |---|---|
 | Frontend | Angular 22 (standalone components, signals, zoneless), SCSS, marked + DOMPurify, Vitest |
-| Backend | Python 3.11, FastAPI, Pydantic v2, uvicorn, managed with [uv](https://docs.astral.sh/uv/) |
+| Backend | Python 3.11+, FastAPI, Pydantic v2, uvicorn (plain `venv` + `pip`) |
 | Agents | LangGraph 1.x, LangChain OpenAI |
 | LLM | OpenAI (chat models, moderation) |
 | Web search | Tavily |
@@ -73,27 +73,41 @@ verified web search, and live progress shown in the UI while the graph runs.
 ## Quick start
 
 ### Requirements
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) - installs Python 3.11 and the backend environment
+- **Python 3.11 or newer** ([python.org](https://www.python.org/downloads/)) - 3.10 is not enough
+  (LangGraph's live progress needs 3.11+ for async code)
 - Node.js 20+ and npm
 - An OpenAI API key (and a Tavily API key for web search)
 
 ### 1. Backend
 
+Create a virtual environment and install the pinned dependencies:
+
 ```bash
 cd backend
-uv sync
+python -m venv .venv
+```
+
+Activate it:
+
+- Windows (PowerShell): `.venv\Scripts\Activate.ps1`
+- Windows (cmd): `.venv\Scripts\activate.bat`
+- macOS / Linux: `source .venv/bin/activate`
+
+```bash
+pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
 (Windows PowerShell: `Copy-Item .env.example .env`)
 
-`uv sync` downloads Python 3.11 if needed (`backend/.python-version`), creates `backend/.venv`
-and installs the exact versions from `backend/uv.lock`.
+If `python` on your machine is older than 3.11, create the venv with a specific version,
+e.g. `py -3.11 -m venv .venv` on Windows or `python3.11 -m venv .venv` on macOS/Linux.
+`requirements.txt` holds the app's dependencies; `requirements-dev.txt` adds the test tools.
 
 Create your login password hash and a JWT secret:
 
 ```bash
-uv run python scripts/hash_password.py --secret
+python scripts/hash_password.py --secret
 ```
 
 Paste the printed `APP_PASSWORD_HASH=...` and `JWT_SECRET=...` lines into `backend/.env`, set
@@ -107,7 +121,7 @@ TAVILY_API_KEY=tvly-...
 Start the API:
 
 ```bash
-uv run uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 
 API docs: http://localhost:8000/docs
@@ -200,8 +214,10 @@ The frontend has no secrets.
 
 ```bash
 cd backend
-uv run pytest
+python -m pytest
 ```
+
+(with the backend virtual environment activated)
 
 ```bash
 cd frontend
@@ -244,7 +260,7 @@ backend/
   config/models.yaml
   scripts/hash_password.py
   tests/
-  pyproject.toml, uv.lock, .python-version
+  requirements.txt, requirements-dev.txt, pytest.ini
 frontend/
   src/app/
     core/         auth, chat list, chat session (streaming), models, uploads, SSE client, markdown
