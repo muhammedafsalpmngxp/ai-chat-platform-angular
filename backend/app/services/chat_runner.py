@@ -37,6 +37,7 @@ from app.graph.prompts import load_prompt, template
 from app.graph.state import ChatContext, Usage
 from app.schemas import (
     DEFAULT_CHAT_TITLE,
+    AskDataResult,
     AttachmentInfo,
     ChatDetail,
     ChatSummary,
@@ -45,6 +46,7 @@ from app.schemas import (
     User,
     new_id,
 )
+from app.services.ask_data import AskDataGateway
 from app.services.llm import LLMFactory, MissingApiKeyError
 from app.storage.attachments import attachment_refs
 
@@ -52,7 +54,7 @@ logger = logging.getLogger("chatbot.runner")
 
 Event = dict[str, Any]
 STREAMING_NODES = ("chitchat", "synthesizer")  # their LLM tokens go to the client
-ANSWER_NODES = ("chitchat", "synthesizer", "web_search", "realtime", "refusal", "output_guard")
+ANSWER_NODES = ("chitchat", "synthesizer", "web_search", "realtime", "refusal", "output_guard", "ask_data")
 # Shown live in the UI while the graph runs (stream_mode="tasks").
 STEP_LABELS = {
     "input_guard": "Safety check",
@@ -62,6 +64,7 @@ STEP_LABELS = {
     "evidence": "Checking facts across sources",
     "synthesizer": "Writing the answer",
     "realtime": "Checking live data",
+    "ask_data": "Asking the company data",
     "refusal": "Preparing a reply",
     "output_guard": "Checking the answer",
 }
@@ -85,6 +88,7 @@ class _Turn:
     model: str
     attachments: list[AttachmentInfo]
     timezone: str
+    mode: str = "auto"
 
 
 # --------------------------------------------------------------- conversions
@@ -102,6 +106,7 @@ def to_langchain(message: Message) -> AnyMessage:
             "model": message.model,
             "sources": [s.model_dump() for s in message.sources],
             "confidence": message.confidence,
+            **({"ask_data": message.data.model_dump(mode="json")} if message.data else {}),
         },
     )
 
@@ -115,6 +120,13 @@ def from_langchain(message: AnyMessage, known: dict[str, Message]) -> Message | 
         return None
     meta = message.response_metadata or {}
     previous = known.get(message.id or "")
+    data = None
+    if role == "assistant" and meta.get("ask_data"):
+        try:
+            data = AskDataResult.model_validate(meta["ask_data"])
+        except ValueError:
+            # Never let odd company data stop a chat from being saved: keep the text answer.
+            logger.warning("Dropping Ask Data details that could not be saved", exc_info=True)
     result = Message(
         id=message.id or new_id(),
         role=role,
@@ -124,6 +136,7 @@ def from_langchain(message: AnyMessage, known: dict[str, Message]) -> Message | 
         attachments=[AttachmentInfo.model_validate(a) for a in meta.get("attachments") or []],
         sources=[Source.model_validate(s) for s in meta.get("sources") or []],
         confidence=meta.get("confidence") if meta.get("confidence") in ("high", "medium", "low") else None,
+        data=data,
     )
     if previous is not None:
         result.created_at = previous.created_at
@@ -143,7 +156,9 @@ class ChatRunner:
         llm_factory: LLMFactory,
         settings: Settings,
         catalog: ModelCatalog,
+        ask_data: AskDataGateway | None = None,
     ) -> None:
+        self._ask_data = ask_data
         self._catalog = catalog
         self._graph = graph
         self._checkpointer = checkpointer
@@ -178,6 +193,7 @@ class ChatRunner:
         *,
         attachments: list[AttachmentInfo] | None = None,
         timezone: str | None = None,
+        mode: str = "auto",
     ) -> AsyncIterator[Event]:
         """Start generating a reply now; returns the event stream for the response."""
         key = self.thread_id(user.id, chat.id)
@@ -185,7 +201,9 @@ class ChatRunner:
             raise ChatBusyError
         self._busy.add(key)
         queue: asyncio.Queue[Event | None] = asyncio.Queue()
-        turn = _Turn(content=content, model=model, attachments=attachments or [], timezone=timezone or "UTC")
+        turn = _Turn(
+            content=content, model=model, attachments=attachments or [], timezone=timezone or "UTC", mode=mode
+        )
         task = asyncio.create_task(self._run(user, chat, turn, queue, key))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -213,7 +231,14 @@ class ChatRunner:
         emit = queue.put_nowait
         content, model = turn.content, turn.model
         config = self._config(user.id, chat.id)
-        context = ChatContext(model=model, user_id=user.id, chat_id=chat.id, timezone=turn.timezone)
+        context = ChatContext(
+            model=model,
+            user_id=user.id,
+            chat_id=chat.id,
+            timezone=turn.timezone,
+            mode=turn.mode,
+            ask_data_connected=bool(self._ask_data and self._ask_data.is_connected(user.id)),
+        )
         is_first_turn = not chat.messages
         human = HumanMessage(
             content=content,
@@ -254,7 +279,11 @@ class ChatRunner:
                         }})
                     continue
                 if mode == "custom":
-                    if isinstance(data, dict) and data.get("node") in STEP_LABELS:
+                    if isinstance(data, dict) and isinstance(data.get("answer_delta"), str):
+                        # Text pieces from a non-LLM node (the company Ask Data agent).
+                        partial.append(data["answer_delta"])
+                        emit({"event": "token", "data": {"text": data["answer_delta"]}})
+                    elif isinstance(data, dict) and data.get("node") in STEP_LABELS:
                         emit({"event": "step", "data": {
                             "node": data["node"],
                             "label": STEP_LABELS[data["node"]],
@@ -308,11 +337,11 @@ class ChatRunner:
                 await self._save_stopped(user, chat, model, config, partial, usage, router_usage)
             raise
         except MissingApiKeyError:
-            await self._save(user, chat, model, usage, router_usage)
+            await self._save_quietly(user, chat, model, usage, router_usage)
             emit({"event": "error", "data": {"detail": template("missing_api_key")}})
         except Exception as exc:  # noqa: BLE001 - report any model/API failure to the client
             logger.exception("Chat turn failed")
-            await self._save(user, chat, model, usage, router_usage)
+            await self._save_quietly(user, chat, model, usage, router_usage)
             detail = template("model_error")
             if self._settings.environment == "development":
                 detail += f"\n\n({type(exc).__name__}: {exc})"
@@ -320,6 +349,13 @@ class ChatRunner:
         finally:
             self._busy.discard(key)
             emit(None)
+
+    async def _save_quietly(self, user, chat, model, usage, router_usage) -> None:
+        """Best-effort save on the error path: a second failure must not hide the first."""
+        try:
+            await self._save(user, chat, model, usage, router_usage)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not save the chat after a failed turn")
 
     async def _save_stopped(self, user, chat, model, config, partial, usage, router_usage) -> None:
         try:
@@ -391,7 +427,8 @@ class ChatRunner:
         self, user: User, chat: ChatDetail, question: str, reply: Message | None
     ) -> ChatSummary | None:
         title = ""
-        if reply and reply.status == "complete":
+        # Ask Data replies contain company data: never send them to OpenAI for a title.
+        if reply and reply.status == "complete" and reply.data is None and reply.model != "ask-data":
             try:
                 llm = self._llm_factory(self._settings.utility_model)
                 result = await llm.ainvoke([

@@ -71,7 +71,7 @@ async def send_message(
 
     try:
         events = runner.start_turn(
-            user, chat, content, model.id, attachments=attachments, timezone=body.timezone
+            user, chat, content, model.id, attachments=attachments, timezone=body.timezone, mode=body.mode
         )
     except ChatBusyError:
         raise HTTPException(status_code=409, detail="A reply is already being generated") from None

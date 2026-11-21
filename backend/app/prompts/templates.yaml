@@ -17,6 +17,17 @@ search_no_results: >-
   The web search returned no usable results. Say you couldn't find current
   information, and only add what you know with a clear "may be outdated" note.
 
+ask_data_not_connected: >-
+  To ask about company data, connect your company account first:
+  open Settings → Company data (Ask Data) and sign in.
+
+ask_data_disabled: >-
+  Ask Data is not set up on this server (ASK_DATA_AUTH_URL and ASK_DATA_API_URL
+  in backend/.env).
+
+ask_data_failed: >-
+  The company data service could not answer right now. Please try again.
+
 model_error: >-
   Something went wrong while generating a response. Please try again.
 

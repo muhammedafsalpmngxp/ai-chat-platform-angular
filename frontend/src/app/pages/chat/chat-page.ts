@@ -12,8 +12,9 @@ import {
 } from '@angular/core';
 import { TitleCasePipe } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 
+import { AskDataService } from '../../core/ask-data.service';
 import { AttachmentService, formatBytes } from '../../core/attachment.service';
 import { AuthService } from '../../core/auth.service';
 import { ChatService } from '../../core/chat.service';
@@ -21,13 +22,14 @@ import { ChatSessionService, SendFailure, isNotFound } from '../../core/chat-ses
 import { CHECK_ICON, COPY_ICON, renderMarkdown, stripCitations } from '../../core/markdown';
 import { ModelService } from '../../core/model.service';
 import { GraphStep, PendingFile, UiMessage } from '../../core/models';
+import { AskDataResultView } from './ask-data-result';
 import { AttachmentChip } from './attachment-chip';
 import { ContextMeter } from './context-meter';
 import { ModelPicker } from './model-picker';
 
 @Component({
   selector: 'app-chat-page',
-  imports: [ContextMeter, ModelPicker, AttachmentChip, TitleCasePipe],
+  imports: [ContextMeter, ModelPicker, AttachmentChip, AskDataResultView, RouterLink, TitleCasePipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-page.html',
   styleUrl: './chat-page.scss',
@@ -40,6 +42,12 @@ export class ChatPage {
   private readonly modelService = inject(ModelService);
   protected readonly session = inject(ChatSessionService);
   protected readonly files = inject(AttachmentService);
+  protected readonly askData = inject(AskDataService);
+
+  /** The Ask Data toggle (only when the server has Ask Data configured). */
+  protected readonly askDataOn = computed(
+    () => !!this.files.config()?.ask_data_enabled && this.askData.mode() === 'ask_data',
+  );
 
   /** Route param /c/:id (bound via withComponentInputBinding). */
   readonly id = input<string>();
@@ -87,6 +95,7 @@ export class ChatPage {
 
   constructor() {
     void this.files.loadConfig();
+    void this.askData.load();
 
     effect(() => {
       const id = this.id() ?? null;
@@ -142,6 +151,18 @@ export class ChatPage {
     this.stickToBottom = true;
     void this.session.send(text, this.files.take()); // starts synchronously, before navigation
     if (this.id() !== chatId) await this.router.navigate(['/c', chatId]);
+  }
+
+  protected toggleAskData(): void {
+    this.askData.setMode(this.askDataOn() ? 'auto' : 'ask_data');
+    this.textarea()?.nativeElement.focus();
+  }
+
+  /** A suggested follow-up under an Ask Data answer. */
+  protected async askFollowup(question: string): Promise<void> {
+    if (this.session.streaming()) return;
+    this.draft.set(question);
+    await this.submit();
   }
 
   // ---------------------------------------------------------------- uploads

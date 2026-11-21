@@ -31,6 +31,28 @@ export interface Source {
   url: string;
 }
 
+/** What the company Ask Data agent returned with its answer. */
+export interface AskDataResult {
+  sql: string | null;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  total_rows: number | null;
+  source_name: string | null;
+  followups: string[];
+  conversation_id: string | null;
+  error: string | null;
+  chart_type?: 'pie' | 'bar' | 'line' | null;
+  chart_title?: string | null;
+}
+
+export interface AskDataStatus {
+  enabled: boolean;
+  connected: boolean;
+  email: string | null;
+}
+
+export type ChatMode = 'auto' | 'ask_data';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -41,6 +63,8 @@ export interface ChatMessage {
   sources?: Source[];
   /** Web answers: how well the sources agreed. */
   confidence?: 'high' | 'medium' | 'low' | null;
+  /** Ask Data answers: SQL, result table, follow-up questions. */
+  data?: AskDataResult | null;
   created_at: string;
 }
 
@@ -49,6 +73,7 @@ export interface ClientConfig {
   max_files_per_chat: number;
   accept: string;
   search_enabled: boolean;
+  ask_data_enabled: boolean;
 }
 
 /** A file in the composer: uploading, ready to send, or failed. */

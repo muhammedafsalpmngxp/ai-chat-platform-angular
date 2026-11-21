@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -62,6 +62,30 @@ class Source(BaseModel):
     url: str
 
 
+class AskDataResult(BaseModel):
+    """What the company Ask Data agent returned alongside its answer."""
+
+    sql: str | None = None
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict] = Field(default_factory=list)  # capped (see ask_data_max_rows)
+    total_rows: int | None = None
+    source_name: str | None = None
+    followups: list[str] = Field(default_factory=list)
+    conversation_id: str | None = None
+    error: str | None = None
+    # Chart hint: from the company server's chartspec, or the user asked for a chart.
+    chart_type: Literal["pie", "bar", "line"] | None = None
+    chart_title: str | None = None
+
+    # The company API may send ids/names as numbers: accept them and store text.
+    @field_validator("conversation_id", "source_name", "chart_title", mode="before")
+    @classmethod
+    def _to_text(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        return value
+
+
 class Message(BaseModel):
     id: str = Field(default_factory=new_id)
     role: Literal["user", "assistant", "system"]
@@ -72,6 +96,8 @@ class Message(BaseModel):
     sources: list[Source] = Field(default_factory=list)
     # Web answers: how well the sources agreed (from the evidence check).
     confidence: Literal["high", "medium", "low"] | None = None
+    # Ask Data answers: SQL, result table, follow-up questions.
+    data: AskDataResult | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -110,6 +136,22 @@ class SendMessageRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=10)
     # IANA timezone from the browser, e.g. "Asia/Kolkata", so "now" is the user's now.
     timezone: str | None = Field(default=None, max_length=64)
+    # "ask_data" forces the company-data route; "auto" lets the router decide.
+    mode: Literal["auto", "ask_data"] = "auto"
+
+
+# ---------- Ask Data (company account) ----------
+
+
+class AskDataConnect(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class AskDataStatus(BaseModel):
+    enabled: bool  # the server URLs are configured
+    connected: bool
+    email: str | None = None
 
 
 # ---------- Models catalog ----------

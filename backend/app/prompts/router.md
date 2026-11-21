@@ -13,12 +13,12 @@ Classify the user's latest message into exactly one intent.
   prices of products, anything about the current year or last year.
 - realtime: live data that changes minute by minute: weather and forecasts, live stock
   or crypto prices, live scores, traffic, flight status.
-
+{ask_data_option}
 Current date: {today}. Use earlier messages to understand follow-ups
 (e.g. "what about Dangal?" after a box-office question is still about box office).
 
 Reply with JSON only:
-{{"intent": "chitchat" | "web_search" | "realtime", "search_queries": ["...", "..."]}}
+{{"intent": {intents}, "search_queries": ["...", "..."]}}
 
 search_queries (only for web_search, otherwise []): one or two short, specific web
 queries. The first answers the question directly (include the year when relevant).

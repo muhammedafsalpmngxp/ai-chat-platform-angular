@@ -12,6 +12,50 @@
     <p class="hint">To change your name or password, edit <code>backend/.env</code> (see the README).</p>
   </section>
 
+  <section class="card" id="company-data">
+    <h2>Company data (Ask Data)</h2>
+    @let status = askData.status();
+    @if (!status) {
+      <p class="hint">Loading…</p>
+    } @else if (!status.enabled) {
+      <p class="hint">
+        Ask Data is not set up on this server. Set <code>ASK_DATA_AUTH_URL</code> and
+        <code>ASK_DATA_API_URL</code> in <code>backend/.env</code> and restart the backend.
+      </p>
+    } @else if (status.connected) {
+      <p class="connected">
+        <span class="dot" aria-hidden="true"></span>
+        Connected as <strong>{{ status.email }}</strong>
+      </p>
+      <p class="hint">
+        Turn on <strong>Ask Data</strong> under the message box to ask questions about the company
+        database. The connection lasts until you disconnect or the backend restarts.
+      </p>
+      <button type="button" class="btn" (click)="disconnect()" [disabled]="busy()">Disconnect</button>
+    } @else {
+      <p class="hint">
+        Sign in with your company account to ask questions about company data. Your password is
+        sent once to the company server to sign in and is <strong>never stored</strong>.
+      </p>
+      <form class="connect" (submit)="$event.preventDefault(); connect()">
+        <label>
+          <span>Company email</span>
+          <input type="email" autocomplete="username" [value]="email()" (input)="email.set($any($event.target).value)" />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" autocomplete="current-password" [value]="password()" (input)="password.set($any($event.target).value)" />
+        </label>
+        @if (error(); as message) {
+          <p class="error" role="alert">{{ message }}</p>
+        }
+        <button type="submit" class="btn primary" [disabled]="busy() || !email() || !password()">
+          {{ busy() ? 'Connecting…' : 'Connect' }}
+        </button>
+      </form>
+    }
+  </section>
+
   <section class="card" id="pricing">
     <h2>Models &amp; pricing</h2>
     <p class="hint">

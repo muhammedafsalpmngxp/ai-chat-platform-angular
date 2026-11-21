@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.memory import InMemorySaver
 
+from app.api import ask_data as ask_data_api
 from app.api import attachments as attachments_api
 from app.api import config as config_api
 from app.api import auth, chats, messages, models
@@ -17,6 +18,7 @@ from app.core.config import Settings, get_settings
 from app.core.models_catalog import load_catalog
 from app.core.rate_limit import AttemptLimiter
 from app.graph import build_chat_graph
+from app.services.ask_data import AskDataClient, AskDataGateway
 from app.services.chat_runner import ChatRunner
 from app.services.llm import LLMFactory, Moderator, OpenAIModerator, openai_llm_factory
 from app.services.search import Searcher, TavilySearcher
@@ -45,8 +47,9 @@ def create_app(
     llm_factory: LLMFactory | None = None,
     moderator: Moderator | None = None,
     searcher: Searcher | None = None,
+    ask_data_client: AskDataClient | None = None,
 ) -> FastAPI:
-    """Build the app. Tests pass fake `llm_factory` / `moderator` / `searcher`."""
+    """Build the app. Tests pass fakes for the LLM, moderator, search and Ask Data."""
     settings = settings or get_settings()
     _check_settings(settings)
     catalog = load_catalog(settings.models_config_path)  # fail fast on a broken models.yaml
@@ -61,6 +64,11 @@ def create_app(
         searcher = TavilySearcher(settings.tavily_api_key, settings.search_max_results, settings.search_depth)
     if searcher is None:
         logger.warning("TAVILY_API_KEY is not set: web search questions will be answered without search.")
+    if ask_data_client is None and settings.ask_data_enabled:
+        ask_data_client = AskDataClient(
+            settings.ask_data_auth_url, settings.ask_data_api_url, settings.ask_data_timeout_seconds
+        )
+    ask_data = AskDataGateway(ask_data_client) if ask_data_client else None
     chat_repo = build_chat_repository(settings)
     attachments = AttachmentStore(
         settings.data_dir,
@@ -81,6 +89,9 @@ def create_app(
         search_max_queries=settings.search_max_queries,
         search_max_sources=settings.search_max_sources,
         search_verify=settings.search_verify,
+        ask_data=ask_data,
+        ask_data_description=settings.ask_data_description,
+        ask_data_max_rows=settings.ask_data_max_rows,
         checkpointer=checkpointer,
     )
     runner = ChatRunner(
@@ -90,6 +101,7 @@ def create_app(
         llm_factory=llm_factory,
         settings=settings,
         catalog=catalog,
+        ask_data=ask_data,
     )
 
     @asynccontextmanager
@@ -101,6 +113,7 @@ def create_app(
     app.state.settings = settings
     app.state.chat_repo = chat_repo
     app.state.attachments = attachments
+    app.state.ask_data = ask_data
     app.state.user_store = build_user_store(settings)
     app.state.graph = graph
     app.state.chat_runner = runner
@@ -122,6 +135,7 @@ def create_app(
     app.include_router(messages.router, prefix="/api")
     app.include_router(attachments_api.router, prefix="/api")
     app.include_router(config_api.router, prefix="/api")
+    app.include_router(ask_data_api.router, prefix="/api")
     app.include_router(models.router, prefix="/api")
 
     @app.get("/api/health", tags=["health"])

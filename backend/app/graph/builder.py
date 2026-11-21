@@ -4,6 +4,7 @@
                         \--safe--> router --chitchat----> chitchat ---------------------------> output_guard -> END
                                           --web_search--> web_search -> evidence -> synthesizer -/
                                           --realtime----> realtime -> END
+                                          --ask_data----> ask_data -> END   (company data agent)
 
 web_search  researches (1-2 queries in parallel, filtered and de-duplicated),
 evidence    compares every candidate across the results with the utility model,
@@ -39,6 +40,8 @@ from langgraph.types import StreamWriter
 from app.graph.prompts import load_prompt, local_now, system_prompt, template
 from app.graph.rules import is_datetime_question, is_realtime, is_trivial, likely_needs_search
 from app.graph.state import ChatContext, ChatState, Intent, Usage
+from app.schemas import AskDataResult
+from app.services.ask_data import AskDataAuthError, AskDataError, AskDataGateway, AskDataNotConnected
 from app.services.llm import LLMFactory, Moderator
 from app.services.search import Searcher, SearchResult, is_blocked_url, is_low_trust_url
 from app.storage.attachments import LoadedAttachment
@@ -138,9 +141,80 @@ def _json_object(text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# ----------------------------------------------- Ask Data event helpers (shape-tolerant)
+
+
+def _shape(data: object) -> str:
+    """Describe an event payload without its values (for logs)."""
+    if isinstance(data, dict):
+        return "dict(" + ",".join(sorted(map(str, data.keys())))[:200] + ")"
+    if isinstance(data, list):
+        return f"list[{len(data)}]" + (f" of {type(data[0]).__name__}" if data else "")
+    return type(data).__name__
+
+
+def _text_of(data: object) -> str | None:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, (int, float)) and not isinstance(data, bool):
+        return str(data)
+    if isinstance(data, dict):
+        for key in ("text", "message", "answer", "question", "label", "title", "value"):
+            if isinstance(data.get(key), str):
+                return data[key]
+    return None
+
+
+def _table_of(data: dict) -> tuple[list[str], list[dict]]:
+    """Columns as names; rows as {column: value} - from objects or plain lists."""
+    raw_columns = data.get("columns") or []
+    columns = [
+        c if isinstance(c, str)
+        else str(c.get("name") or c.get("field") or c.get("key") or c.get("title") or "")
+        if isinstance(c, dict) else str(c)
+        for c in raw_columns
+    ]
+    rows: list[dict] = []
+    for row in data.get("rows") or []:
+        if isinstance(row, dict):
+            rows.append(row)
+        elif isinstance(row, (list, tuple)) and columns:
+            rows.append(dict(zip(columns, row)))
+    if not columns and rows:
+        columns = [str(k) for k in rows[0]]
+    return columns, rows
+
+
+def _chart_kind(spec: dict) -> str | None:
+    kind = str(spec.get("type") or spec.get("chartType") or spec.get("kind") or "").lower()
+    if kind in ("pie", "donut", "doughnut"):
+        return "pie"
+    if kind in ("bar", "column", "horizontalbar", "stackedbar"):
+        return "bar"
+    if kind in ("line", "area", "spline"):
+        return "line"
+    return None
+
+
+_CHART_WORDS = re.compile(r"\b(pie|donut|doughnut|bar|column|line)\s*(chart|graph)?\b|\b(chart|graph|plot)\b", re.I)
+
+
+def _chart_hint(question: str) -> str | None:
+    """The user asked for a chart ("as a pie chart", "bar graph", "plot ...")."""
+    match = _CHART_WORDS.search(question)
+    if not match:
+        return None
+    word = (match.group(1) or "").lower()
+    if word in ("pie", "donut", "doughnut"):
+        return "pie"
+    if word == "line":
+        return "line"
+    return "bar"
+
+
 def _parse_router_json(text: str) -> tuple[Intent | None, list[str]]:
     data = _json_object(text)
-    if not data or data.get("intent") not in ("chitchat", "web_search", "realtime"):
+    if not data or data.get("intent") not in ("chitchat", "web_search", "realtime", "ask_data"):
         return None, []
     queries = data.get("search_queries")
     if not isinstance(queries, list):
@@ -161,6 +235,9 @@ def build_chat_graph(
     search_max_queries: int = 2,
     search_max_sources: int = 8,
     search_verify: bool = True,
+    ask_data: AskDataGateway | None = None,
+    ask_data_description: str = "the company's own business data",
+    ask_data_max_rows: int = 200,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> CompiledStateGraph:
     # ---------------------------------------------------------------- helpers
@@ -215,6 +292,10 @@ def build_chat_graph(
         human = _last(state["messages"], HumanMessage)
         text = latest_question(state)
         quiet = {"search_queries": [], "router_usage": Usage()}
+        ctx = runtime.context
+        if ctx.mode == "ask_data":  # the user switched Ask Data on for this message
+            return {"intent": "ask_data", **quiet}
+        offer_ask_data = ask_data is not None and ctx.ask_data_connected
         if is_trivial(text) or is_datetime_question(text) or (human is not None and attachment_refs(human)):
             return {"intent": "chitchat", **quiet}
         if is_realtime(text):
@@ -230,8 +311,17 @@ def build_chat_graph(
             for m in earlier
         )
         today = local_now(runtime.context.timezone).date().isoformat()
+        ask_data_option = (
+            f"- ask_data: questions about {ask_data_description}. These are answered from the "
+            "company database (counts, lists, totals, trends, comparisons of the company's own records).\n"
+            if offer_ask_data
+            else ""
+        )
+        intents = '"chitchat" | "web_search" | "realtime"' + (' | "ask_data"' if offer_ask_data else "")
         prompt = [
-            SystemMessage(content=load_prompt("router").format(today=today)),
+            SystemMessage(content=load_prompt("router").format(
+                today=today, ask_data_option=ask_data_option, intents=intents
+            )),
             HumanMessage(content=f"Earlier messages:\n{transcript or '(none)'}\n\nLatest message:\n{text}"),
         ]
         try:
@@ -242,6 +332,8 @@ def build_chat_graph(
         except Exception:  # noqa: BLE001 - routing must never break the chat
             logger.warning("LLM router failed; using rules", exc_info=True)
             intent, queries, usage = None, [], Usage()
+        if intent == "ask_data" and not offer_ask_data:
+            intent = None  # not available for this user right now
         return {
             "intent": intent or fallback,
             "search_queries": (queries or [text])[:search_max_queries],
@@ -363,6 +455,99 @@ def build_chat_graph(
             reply.response_metadata["confidence"] = notes["confidence"]
         return {"messages": [reply], "usage": _usage_from(reply)}
 
+    async def ask_data_node(state: ChatState, runtime: Runtime[ChatContext], writer: StreamWriter) -> dict:
+        """Ask the company's own Ask Data agent (text-to-SQL) and stream its events.
+
+        Company answers are not sent to OpenAI by us (no moderation, no titles from them).
+        """
+        ctx = runtime.context
+        meta: dict = {"status": "complete", "model": "ask-data"}
+
+        def fixed(text: str) -> dict:
+            return {"messages": [AIMessage(content=text, response_metadata=meta)], "usage": Usage()}
+
+        if ask_data is None:
+            return fixed(template("ask_data_disabled"))
+        if not ask_data.is_connected(ctx.user_id):
+            return fixed(template("ask_data_not_connected"))
+
+        # Continue the company-side conversation so follow-ups ("and last month?") work.
+        conversation_id = None
+        for message in reversed(state["messages"]):
+            data = (message.response_metadata or {}).get("ask_data") if isinstance(message, AIMessage) else None
+            if data and data.get("conversation_id"):
+                conversation_id = data["conversation_id"]
+                break
+
+        question = latest_question(state)
+        found: dict = {"conversation_id": conversation_id, "chart_type": _chart_hint(question)}
+        answer: list[str] = []
+        try:
+            async for event, data in ask_data.ask(ctx.user_id, question, conversation_id):
+                logger.info("Ask Data event %s: %s", event, _shape(data))  # shape only, never values
+                if event == "status":
+                    if text := _text_of(data):
+                        writer({"node": "ask_data", "detail": text[:120]})
+                elif event == "sql":
+                    sql = data.get("sql") if isinstance(data, dict) else data
+                    if isinstance(sql, str) and sql.strip():
+                        found["sql"] = sql
+                        writer({"node": "ask_data", "detail": "Wrote the SQL query"})
+                elif event == "result" and isinstance(data, dict):
+                    columns, rows = _table_of(data)
+                    total = data.get("totalRows", data.get("total_rows"))
+                    found.update(
+                        columns=columns,
+                        rows=rows[:ask_data_max_rows],
+                        total_rows=int(total) if isinstance(total, (int, float)) else len(rows),
+                    )
+                    writer({"node": "ask_data", "detail": f"Got {found['total_rows']:,} rows"})
+                elif event in ("answer", "clarify"):
+                    if text := _text_of(data):
+                        answer.append(text)
+                        writer({"node": "ask_data", "answer_delta": text})
+                elif event in ("followups", "suggestions") and isinstance(data, list):
+                    found["followups"] = [t for item in data if (t := _text_of(item))][:6]
+                elif event in ("chartspec", "chart") and isinstance(data, dict):
+                    kind = _chart_kind(data)
+                    if kind:
+                        found["chart_type"] = kind
+                    if isinstance(data.get("title"), str):
+                        found["chart_title"] = data["title"]
+                elif event == "error":
+                    found["error"] = (_text_of(data) or json.dumps(data, default=str))[:300]
+                elif event == "done" and isinstance(data, dict):
+                    if data.get("conversationId") is not None:
+                        found["conversation_id"] = data["conversationId"]
+                    if data.get("sourceName") is not None:
+                        found["source_name"] = data["sourceName"]
+        except AskDataNotConnected:
+            return fixed(template("ask_data_not_connected"))
+        except AskDataAuthError:
+            return fixed(template("ask_data_not_connected"))
+        except AskDataError as exc:
+            logger.warning("Ask Data failed: %s", exc)
+            return fixed(f"{template('ask_data_failed')}\n\n({exc})")
+
+        # Validate here (ids as numbers become text), so saving the chat can never fail on it.
+        try:
+            result = AskDataResult.model_validate(found)
+        except ValueError:
+            logger.warning("Unexpected Ask Data result shape; keeping the answer only", exc_info=True)
+            result = AskDataResult(conversation_id=str(found.get("conversation_id") or "") or None)
+        if not result.rows:
+            result.chart_type = None  # nothing to draw
+
+        text = "".join(answer).strip()
+        if not text and result.error:
+            text = result.error
+        elif not text and result.rows:
+            text = "Here is the chart." if result.chart_type else "Here are the results."
+        elif not text:
+            text = template("ask_data_failed")
+        meta["ask_data"] = result.model_dump(mode="json")
+        return {"messages": [AIMessage(content=text, response_metadata=meta)], "usage": Usage()}
+
     def realtime(state: ChatState) -> dict:
         reply = AIMessage(content=template("realtime_unknown"), response_metadata={"status": "complete"})
         return {"messages": [reply], "usage": Usage()}
@@ -387,7 +572,7 @@ def build_chat_graph(
     def after_input_guard(state: ChatState) -> Literal["refusal", "router"]:
         return "refusal" if state.get("safety") == "explicit" else "router"
 
-    def after_router(state: ChatState) -> Literal["chitchat", "web_search", "realtime"]:
+    def after_router(state: ChatState) -> Literal["chitchat", "web_search", "realtime", "ask_data"]:
         return state.get("intent", "chitchat")
 
     def after_web_search(state: ChatState) -> Literal["evidence", "synthesizer", "__end__"]:
@@ -404,6 +589,7 @@ def build_chat_graph(
     graph.add_node("evidence", evidence)
     graph.add_node("synthesizer", synthesizer)
     graph.add_node("realtime", realtime)
+    graph.add_node("ask_data", ask_data_node)
     graph.add_node("output_guard", output_guard)
 
     graph.add_edge(START, "input_guard")
@@ -416,5 +602,7 @@ def build_chat_graph(
     graph.add_edge("output_guard", END)
     graph.add_edge("refusal", END)
     graph.add_edge("realtime", END)
+    # Company answers skip output_guard: we don't send company data to OpenAI moderation.
+    graph.add_edge("ask_data", END)
 
     return graph.compile(checkpointer=checkpointer, name="chat")

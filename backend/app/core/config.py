@@ -71,6 +71,20 @@ class Settings(BaseSettings):
     # Compare all results with the utility model before answering (more trustworthy).
     search_verify: bool = True
 
+    # --- Ask Data (company data agent on an existing server; used, never modified) ---
+    # Auth service base URL, e.g. http://<server>:7007   (POST /auth/login, /auth/refresh-token)
+    ask_data_auth_url: str = ""
+    # Tenant API base URL incl. /api, e.g. http://<server>:5069/api   (POST /ai/ask, SSE)
+    ask_data_api_url: str = ""
+    # Tells the router which questions belong to Ask Data.
+    ask_data_description: str = (
+        "the company's own business data stored in its database "
+        "(for example wells, plants, production, equipment, operations and KPIs)"
+    )
+    ask_data_timeout_seconds: float = 180
+    # Rows kept per answer in our chat history (the full count is still shown).
+    ask_data_max_rows: int = 200
+
     # --- Uploads ---
     max_upload_mb: int = 10
     max_files_per_chat: int = 3
@@ -83,6 +97,10 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
+
+    @property
+    def ask_data_enabled(self) -> bool:
+        return bool(self.ask_data_auth_url and self.ask_data_api_url)
 
     @field_validator("data_dir", "models_config_path", mode="after")
     @classmethod

@@ -4,7 +4,7 @@ A ChatGPT-style AI assistant with an **Angular** frontend and a **Python FastAPI
 Every reply is produced by a **LangGraph** agent graph: safety checks, a router, fast chat,
 verified web search, and live progress shown in the UI while the graph runs.
 
-> **Status:** `dev-1.0` - phases 1-4 complete (see [Roadmap](#roadmap)).
+> **Status:** `dev-2.0` - phases 1-4 complete, plus the Ask Data integration (see [Roadmap](#roadmap)).
 
 ---
 
@@ -30,6 +30,18 @@ verified web search, and live progress shown in the UI while the graph runs.
 - Clean answers (no `[1]` markers) with a collapsible **Sources** list and a
   **High / Medium / Low confidence** label
 - Live data it can't fetch yet (weather, live scores, live prices) gets an honest *"I don't know that yet"*
+
+**Ask Data - company data (text-to-SQL)**
+- Connects to the company's existing **Ask Data** agent as-is (no changes on that server):
+  our FastAPI backend sits in the middle, so the browser never calls it directly (no CORS
+  issues) and the company token stays on our server
+- Users connect their company account in **Settings → Company data**; the password is sent
+  once to sign in and never stored; tokens are renewed automatically
+- 🗄️ **Ask Data** toggle under the message box sends questions to the company database; when
+  connected, the router can also pick Ask Data on its own for company-data questions
+- Answers stream in, with the **SQL query**, a **results table** and **follow-up questions**;
+  follow-ups continue the same company-side conversation
+- Company answers are not sent to OpenAI by this app (no moderation pass, no AI-generated titles)
 
 **Safety**
 - OpenAI Moderation on questions and answers; explicit requests get a clear refusal
@@ -148,6 +160,7 @@ START -> input_guard --explicit--> refusal -> END
                     \--safe--> router --chitchat----> chitchat -------------------------------> output_guard -> END
                                       --web_search--> web_search -> evidence -> synthesizer -/
                                       --realtime----> realtime -> END
+                                      --ask_data----> ask_data -> END   (company Ask Data server)
 ```
 
 | Node | What it does |
@@ -160,6 +173,7 @@ START -> input_guard --explicit--> refusal -> END
 | `evidence` | Compares every candidate across all sources, notes conflicts and scope, rates confidence |
 | `synthesizer` | Writes the final answer from the checked notes - direct answer first, no citation markers |
 | `realtime` | Fixed "I don't know that yet" for live data |
+| `ask_data` | Sends the question to the company Ask Data server and streams back its status, SQL, result table, answer and follow-ups (see below) |
 | `output_guard` | Moderates the finished answer and replaces it if explicit |
 
 - Graph code: [`backend/app/graph/`](backend/app/graph) - state `ChatState`; per-run settings
@@ -171,6 +185,28 @@ START -> input_guard --explicit--> refusal -> END
 - Prompts are plain, versioned files in [`backend/app/prompts/`](backend/app/prompts).
 - [`backend/langgraph.json`](backend/langgraph.json) exposes the graph to LangGraph tooling
   (`langgraph dev` / LangGraph Studio; needs `langgraph-cli[inmem]`).
+
+### Ask Data integration (company server)
+
+```
+Angular ──► our FastAPI (+ LangGraph ask_data node) ──► company auth   POST /auth/login, /auth/refresh-token
+                                                    └─► company API    POST /api/ai/ask  (SSE)
+                                                            └─► Ask Data agent ─► OpenAI (writes SQL) + company DB
+```
+
+1. **Connect** - Settings → Company data: the email and password go to our backend, which signs
+   in at the company auth service and keeps only `{token, refreshToken}` in memory.
+2. **Ask** - with the Ask Data toggle on (or when the router picks it), the `ask_data` node posts
+   `{question, conversationId, sourceType: null, sourceId: null}` with `Authorization: Bearer <token>`.
+3. **Stream** - the company server's SSE events are mapped into the chat:
+   `status` → live progress, `sql` → Query box, `result` (`{columns, rows, totalRows}`) → table,
+   `answer` → streamed text, `followups` → suggestion chips, `done` → `conversationId` for follow-ups.
+4. **Expired token** - renewed with the refresh token and the question is retried once; if that
+   fails the user is asked to connect again.
+
+Configure it in `backend/.env` (`ASK_DATA_AUTH_URL`, `ASK_DATA_API_URL`); leave both empty to
+hide Ask Data. Note: if the company server uses plain `http://`, credentials and data travel
+unencrypted between our backend and that server.
 
 ### Models and pricing
 
@@ -203,6 +239,8 @@ The frontend has no secrets.
 | `PREMIUM_UNLOCK_MINUTES` | How long a password re-check unlocks premium models | 30 |
 | `MAX_PASSWORD_ATTEMPTS`, `PASSWORD_LOCKOUT_MINUTES` | Wrong-password lockout | 5, 5 |
 | `SEARCH_DEPTH`, `SEARCH_MAX_QUERIES`, `SEARCH_VERIFY` | Search quality vs cost (about 4 Tavily credits per web question by default) | advanced, 2, true |
+| `ASK_DATA_AUTH_URL`, `ASK_DATA_API_URL` | Company Ask Data server (auth base URL; tenant API base URL incl. `/api`); empty = off | - |
+| `ASK_DATA_DESCRIPTION` | Tells the router which questions are company-data questions | wells, plants, production… |
 | `MAX_UPLOAD_MB`, `MAX_FILES_PER_CHAT` | Upload limits | 10, 3 |
 | `HISTORY_MAX_TOKENS` | Older messages beyond this are not sent to the model | 60000 |
 | `STORAGE_BACKEND` | `json` (survives restarts) or `memory` | json |
@@ -240,6 +278,9 @@ Backend tests use a fake LLM, moderator and search provider, so they need no API
 | `POST` | `/api/chats/{id}/messages` | Send a message (optional `model`, `attachment_ids`, `timezone`); streams the reply as SSE |
 | `GET` / `POST` | `/api/chats/{id}/attachments` | List / upload files |
 | `GET` / `DELETE` | `/api/chats/{id}/attachments/{file_id}` | Download / remove a not-yet-sent file |
+| `GET` | `/api/ask-data/status` | Is Ask Data configured / is the company account connected |
+| `POST` | `/api/ask-data/connect` | Sign in to the company account (`{email, password}`; password not stored) |
+| `POST` | `/api/ask-data/disconnect` | Forget the company session |
 | `GET` | `/api/models` | Model catalog with tiers and prices |
 | `GET` | `/api/config` | Upload limits and accepted file types |
 | `GET` | `/api/health` | Health check |
@@ -289,5 +330,6 @@ frontend/
 | 2 | LangGraph core: guards, router, chat, streaming, stop, markdown, context meter | ✅ Done |
 | 3 | Model picker, pricing page, premium password re-check, cost estimate | ✅ Done |
 | 4 | Web search (research → evidence → synthesizer), live-data handling, date/time awareness, file uploads, live graph progress | ✅ Done |
+| 4.5 | Ask Data: company Ask Data server as a new LangGraph route (connect account, SQL, table, follow-ups) | ✅ Done |
 | 5 | Memory across the last 5 chats (summaries + embeddings, retrieved per turn) | Planned |
 | 6 | Polish: light theme, multi-user accounts, database storage, more tests | Planned |

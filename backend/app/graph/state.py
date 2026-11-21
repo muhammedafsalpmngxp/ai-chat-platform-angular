@@ -6,7 +6,7 @@ from typing import Annotated, Literal, TypedDict
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
 
-Intent = Literal["chitchat", "web_search", "realtime"]  # chitchat_with_memory arrives in phase 5
+Intent = Literal["chitchat", "web_search", "realtime", "ask_data"]
 Safety = Literal["safe", "explicit"]
 
 
@@ -44,3 +44,5 @@ class ChatContext:
     user_id: str = ""
     chat_id: str = ""
     timezone: str = "UTC"  # IANA name from the user's browser, e.g. "Asia/Kolkata"
+    mode: str = "auto"  # "ask_data" = the user switched on Ask Data for this message
+    ask_data_connected: bool = False  # the user has a company session for Ask Data

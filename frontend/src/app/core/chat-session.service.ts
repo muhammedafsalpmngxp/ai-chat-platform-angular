@@ -1,6 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 
+import { AskDataService } from './ask-data.service';
 import { AuthService } from './auth.service';
 import { ChatService } from './chat.service';
 import { ModelService } from './model.service';
@@ -49,6 +50,7 @@ export class ChatSessionService {
   private readonly chats = inject(ChatService);
   private readonly auth = inject(AuthService);
   private readonly modelService = inject(ModelService);
+  private readonly askData = inject(AskDataService);
 
   private readonly _chatId = signal<string | null>(null);
   private readonly _messages = signal<UiMessage[]>([]);
@@ -149,6 +151,7 @@ export class ChatSessionService {
     this._streaming.set(true);
     let replyKey = replyId;
     let result: SendResult = { ok: true };
+    let finished = false; // a "done" or "error" event arrived
 
     const patchReply = (patch: Partial<UiMessage> | ((m: UiMessage) => Partial<UiMessage>)) =>
       this._messages.update((list) =>
@@ -173,6 +176,7 @@ export class ChatSessionService {
           patchReply({ content: d['text'], status: d['status'] as MessageStatus });
           break;
         case 'done': {
+          finished = true;
           const message = d['message'] as ChatMessage | null;
           if (message) {
             patchReply({ ...message, pending: false });
@@ -191,6 +195,7 @@ export class ChatSessionService {
           this.chats.upsert(d['chat'] as ChatSummary);
           break;
         case 'error':
+          finished = true;
           patchReply({ pending: false, error: d['detail'] });
           break;
       }
@@ -204,12 +209,21 @@ export class ChatSessionService {
           model: model?.id,
           attachment_ids: attachments.map((a) => a.id),
           timezone: browserTimezone(),
+          mode: this.askData.mode(),
         },
         this.auth.token(),
         controller.signal,
         onEvent,
         headers,
       );
+      if (!finished && this._chatId() === chatId) {
+        // The stream closed without "done": never leave an empty or half-finished bubble silently.
+        patchReply((m) => ({
+          error: m.content
+            ? 'The reply may be incomplete: it ended unexpectedly and may not have been saved.'
+            : 'No reply came back. Please try again.',
+        }));
+      }
     } catch (err) {
       if (controller.signal.aborted) {
         patchReply((m) => ({ pending: false, status: m.content ? 'stopped' : m.status }));
